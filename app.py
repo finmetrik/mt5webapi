@@ -3,12 +3,12 @@ import time
 import hashlib
 import secrets
 import json
+import asyncio
 from datetime import datetime, timedelta
 from typing import Optional, Dict, Any
 
 import httpx
-# Redis import - optional
-from fastapi import FastAPI, HTTPException, Depends, Header, Request
+from fastapi import FastAPI, HTTPException, Depends, Header, Request, BackgroundTasks
 from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
@@ -40,6 +40,7 @@ MT5_PASSWORD = os.getenv('MT5_PASSWORD', 'ApiDubai@2025')
 MT5_AGENT = os.getenv('MT5_AGENT', 'WebManager')
 MT5_VERSION = int(os.getenv('MT5_VERSION', '1290'))
 API_KEY = os.getenv('API_KEY', 'your-secure-api-key-change-this')
+
 # Redis is optional - will use in-memory cache if not available
 REDIS_URL = os.getenv('REDIS_URL', '')
 REDIS_AVAILABLE = False
@@ -96,38 +97,62 @@ def cache_get(key: str) -> Optional[str]:
                 del memory_cache[key]
         return None
 
-# MT5 Session Management
+# MT5 Session Management with Keep-Alive
 class MT5SessionManager:
     def __init__(self):
-        self.session = None
-        self.cookies = {}
+        self.client = None
         self.last_auth_time = None
-        self.auth_lock = False
+        self.auth_lock = asyncio.Lock()
+        self.keep_alive_task = None
+        self.password_hash_bytes = None
 
     def is_session_valid(self) -> bool:
-        """Check if current session is still valid (5 minute timeout)"""
-        if not self.last_auth_time:
+        """Check if current session is still valid"""
+        if not self.last_auth_time or not self.client:
             return False
+        # Consider session valid for 5 minutes (but we'll ping every 20 seconds)
         return (time.time() - self.last_auth_time) < 300
 
-    async def authenticate(self) -> bool:
-        """Authenticate with MT5 server"""
-        if self.auth_lock:
-            # Prevent concurrent authentication attempts
-            for _ in range(30):  # Wait up to 3 seconds
-                await asyncio.sleep(0.1)
-                if not self.auth_lock:
-                    break
+    async def keep_alive_ping(self):
+        """Send keep-alive ping every 20 seconds"""
+        while True:
+            try:
+                await asyncio.sleep(20)
+                if self.client and self.is_session_valid():
+                    # Send ping to keep session alive
+                    try:
+                        response = await self.client.get(f"{MT5_SERVER}/api/test/access")
+                        if response.status_code == 200:
+                            print(f"Keep-alive ping successful at {datetime.now().isoformat()}")
+                        else:
+                            print(f"Keep-alive ping returned status {response.status_code}")
+                    except Exception as e:
+                        print(f"Keep-alive ping failed: {e}")
+                        # If ping fails, try to re-authenticate
+                        await self.authenticate()
+            except asyncio.CancelledError:
+                break
+            except Exception as e:
+                print(f"Keep-alive error: {e}")
 
-        self.auth_lock = True
-        try:
-            async with httpx.AsyncClient(verify=False, timeout=30.0) as client:
-                # Store cookies between requests
-                if self.cookies:
-                    client.cookies = self.cookies
+    async def authenticate(self) -> bool:
+        """Authenticate with MT5 server using persistent session"""
+        async with self.auth_lock:
+            try:
+                # Create a new persistent client with keep-alive
+                if self.client:
+                    await self.client.aclose()
+
+                self.client = httpx.AsyncClient(
+                    verify=False,
+                    timeout=30.0,
+                    headers={"Connection": "keep-alive"}
+                )
+
+                print(f"Authenticating with MT5 server at {MT5_SERVER}")
+                auth_start_time = time.time()
 
                 # Step 1: Auth start
-                print(f"Authenticating with MT5 server at {MT5_SERVER}")
                 start_url = f"{MT5_SERVER}/api/auth/start"
                 params = {
                     'version': MT5_VERSION,
@@ -136,7 +161,7 @@ class MT5SessionManager:
                     'type': 'manager'
                 }
 
-                start_resp = await client.get(start_url, params=params)
+                start_resp = await self.client.get(start_url, params=params)
                 if start_resp.status_code != 200:
                     raise Exception(f"Auth start failed: {start_resp.status_code}")
 
@@ -145,13 +170,18 @@ class MT5SessionManager:
                 if not srv_rand:
                     raise Exception("No srv_rand in response")
 
-                # Step 2: Create auth hash
+                # Step 2: Create auth hash (same as hash.py)
                 pwd_bytes = MT5_PASSWORD.encode('utf-16le')
                 pwd_md5 = hashlib.md5(pwd_bytes).digest()
-                password_hash = hashlib.md5(pwd_md5 + b'WebAPI').digest()
+                self.password_hash_bytes = hashlib.md5(pwd_md5 + b'WebAPI').digest()
                 srv_rand_bytes = bytes.fromhex(srv_rand)
-                srv_rand_answer = hashlib.md5(password_hash + srv_rand_bytes).hexdigest()
+                srv_rand_answer = hashlib.md5(self.password_hash_bytes + srv_rand_bytes).hexdigest()
                 cli_rand = secrets.token_hex(16)
+
+                # Check timing (must be within 10 seconds)
+                elapsed_time = time.time() - auth_start_time
+                if elapsed_time > 10:
+                    print(f"⚠️ Warning: {elapsed_time:.2f}s elapsed, may exceed 10s window")
 
                 # Step 3: Auth answer
                 answer_url = f"{MT5_SERVER}/api/auth/answer"
@@ -160,7 +190,7 @@ class MT5SessionManager:
                     'cli_rand': cli_rand
                 }
 
-                answer_resp = await client.get(answer_url, params=answer_params)
+                answer_resp = await self.client.get(answer_url, params=answer_params)
                 if answer_resp.status_code != 200:
                     raise Exception(f"Auth answer failed: {answer_resp.status_code}")
 
@@ -170,33 +200,76 @@ class MT5SessionManager:
                 if not retcode.startswith('0'):
                     raise Exception(f"MT5 authentication failed: {retcode}")
 
-                # Save session info
-                self.session = client
-                self.cookies = dict(client.cookies)
+                # Validate server auth (mutual authentication)
+                if 'cli_rand_answer' in result:
+                    expected_cli_rand_answer = hashlib.md5(
+                        self.password_hash_bytes + bytes.fromhex(cli_rand)
+                    ).hexdigest()
+                    if result['cli_rand_answer'] != expected_cli_rand_answer:
+                        print("⚠️ Warning: Server authentication validation failed")
+
                 self.last_auth_time = time.time()
+
+                # Start keep-alive task if not already running
+                if self.keep_alive_task:
+                    self.keep_alive_task.cancel()
+                self.keep_alive_task = asyncio.create_task(self.keep_alive_ping())
 
                 # Cache authentication status
                 cache_set('mt5:auth:status', 'authenticated', 300)
 
-                print("MT5 authentication successful")
+                print(f"✅ MT5 authentication successful in {elapsed_time:.2f}s")
                 return True
 
-        except Exception as e:
-            print(f"Authentication error: {e}")
-            return False
-        finally:
-            self.auth_lock = False
+            except Exception as e:
+                print(f"❌ Authentication error: {e}")
+                if self.client:
+                    await self.client.aclose()
+                    self.client = None
+                return False
 
-    async def get_session(self):
-        """Get authenticated session, create new if needed"""
+    async def get_client(self) -> httpx.AsyncClient:
+        """Get authenticated client, create new if needed"""
         if not self.is_session_valid():
             success = await self.authenticate()
             if not success:
                 raise HTTPException(status_code=500, detail="MT5 authentication failed")
-        return self.session
+        return self.client
+
+    async def execute_request(self, endpoint: str, params: Dict[str, Any] = None) -> Dict[str, Any]:
+        """Execute MT5 API request using persistent session"""
+        client = await self.get_client()
+        url = f"{MT5_SERVER}/api/{endpoint.lstrip('/')}"
+
+        try:
+            response = await client.get(url, params=params or {})
+            if response.status_code != 200:
+                # If unauthorized, try to re-authenticate once
+                if response.status_code in [401, 403]:
+                    print("Session expired, re-authenticating...")
+                    await self.authenticate()
+                    client = await self.get_client()
+                    response = await client.get(url, params=params or {})
+
+                if response.status_code != 200:
+                    raise HTTPException(
+                        status_code=response.status_code,
+                        detail=f"MT5 API error: {response.text}"
+                    )
+
+            return response.json()
+        except httpx.RequestError as e:
+            print(f"Request error: {e}")
+            raise HTTPException(status_code=500, detail=str(e))
+
+    async def close(self):
+        """Clean shutdown"""
+        if self.keep_alive_task:
+            self.keep_alive_task.cancel()
+        if self.client:
+            await self.client.aclose()
 
 # Global session manager
-import asyncio
 session_manager = MT5SessionManager()
 
 # API key validation
@@ -274,30 +347,17 @@ async def get_user(login: str, api_key: bool = Depends(verify_api_key)):
                 cached=True
             )
 
-        # Get authenticated session
-        await session_manager.get_session()
-
         # Fetch from MT5
-        async with httpx.AsyncClient(verify=False, timeout=30.0, cookies=session_manager.cookies) as client:
-            url = f"{MT5_SERVER}/api/user/get"
-            resp = await client.get(url, params={'login': login})
+        data = await session_manager.execute_request("user/get", {"login": login})
 
-            if resp.status_code != 200:
-                raise HTTPException(
-                    status_code=resp.status_code,
-                    detail=f"MT5 API error: {resp.text}"
-                )
+        # Cache the result
+        cache_set(cache_key, json.dumps(data), 60)
 
-            data = resp.json()
-
-            # Cache the result
-            cache_set(cache_key, json.dumps(data), 60)
-
-            return UserResponse(
-                success=True,
-                data=data,
-                cached=False
-            )
+        return UserResponse(
+            success=True,
+            data=data,
+            cached=False
+        )
 
     except HTTPException:
         raise
@@ -312,24 +372,16 @@ async def execute_command(
 ):
     """Execute arbitrary MT5 API command"""
     try:
-        # Get authenticated session
-        await session_manager.get_session()
+        data = await session_manager.execute_request(request.endpoint, request.params)
 
-        # Build URL
-        endpoint = request.endpoint.lstrip('/')
-        url = f"{MT5_SERVER}/api/{endpoint}"
+        return {
+            "success": True,
+            "data": data,
+            "timestamp": datetime.now().isoformat()
+        }
 
-        # Execute request
-        async with httpx.AsyncClient(verify=False, timeout=30.0, cookies=session_manager.cookies) as client:
-            resp = await client.get(url, params=request.params)
-
-            return {
-                "success": resp.status_code == 200,
-                "status_code": resp.status_code,
-                "data": resp.json() if resp.status_code == 200 else None,
-                "error": resp.text if resp.status_code != 200 else None
-            }
-
+    except HTTPException:
+        raise
     except Exception as e:
         print(f"Error executing command {request.endpoint}: {e}")
         raise HTTPException(status_code=500, detail=str(e))
@@ -338,12 +390,13 @@ async def execute_command(
 async def test_endpoint(api_key: bool = Depends(verify_api_key)):
     """Test endpoint to verify MT5 connection"""
     try:
-        # Test with a known user
-        result = await get_user("46108", api_key)
+        # Test with user 46108 as in hash.py
+        data = await session_manager.execute_request("user/get", {"login": "46108"})
+
         return {
             "success": True,
             "message": "MT5 connection working",
-            "test_user": result.data,
+            "test_user": data,
             "timestamp": datetime.now().isoformat()
         }
     except Exception as e:
@@ -387,14 +440,28 @@ async def startup_event():
     print(f"MT5 WebAPI Service starting...")
     print(f"MT5 Server: {MT5_SERVER}")
     print(f"MT5 Login: {MT5_LOGIN}")
-    print(f"Redis: {'Connected' if REDIS_AVAILABLE else 'Not available'}")
+    print(f"Redis: {'Connected' if REDIS_AVAILABLE else 'Not available - using in-memory cache'}")
 
     # Try initial authentication
     try:
-        await session_manager.authenticate()
-        print("Initial MT5 authentication successful")
+        success = await session_manager.authenticate()
+        if success:
+            print("✅ Initial MT5 authentication successful")
+            # Test the connection
+            test_data = await session_manager.execute_request("user/get", {"login": "46108"})
+            print(f"✅ Test API call successful: User 46108 found")
+        else:
+            print("❌ Initial authentication failed (will retry on first request)")
     except Exception as e:
-        print(f"Initial authentication failed (will retry on first request): {e}")
+        print(f"❌ Startup authentication failed: {e}")
+        print("Will retry on first request...")
+
+# Shutdown event
+@app.on_event("shutdown")
+async def shutdown_event():
+    """Cleanup on shutdown"""
+    print("Shutting down MT5 WebAPI Service...")
+    await session_manager.close()
 
 if __name__ == "__main__":
     import uvicorn
