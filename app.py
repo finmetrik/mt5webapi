@@ -130,6 +130,52 @@ class CreateUserRequest(BaseModel):
             }
         }
 
+class UpdateUserRequest(BaseModel):
+    """Request model for updating a user"""
+    # Required field
+    login: int
+
+    # All fields are optional for update
+    group: Optional[str] = None
+    name: Optional[str] = None
+    leverage: Optional[int] = None
+    rights: Optional[int] = None
+
+    # User details
+    first_name: Optional[str] = None
+    last_name: Optional[str] = None
+    middle_name: Optional[str] = None
+    company: Optional[str] = None
+    country: Optional[str] = None
+    language: Optional[int] = None
+    city: Optional[str] = None
+    state: Optional[str] = None
+    zipcode: Optional[str] = None
+    address: Optional[str] = None
+    phone: Optional[str] = None
+    email: Optional[str] = None
+    id: Optional[str] = None
+    status: Optional[str] = None
+    comment: Optional[str] = None
+    color: Optional[int] = None
+    phone_password: Optional[str] = None
+    agent: Optional[int] = None
+    mqid: Optional[str] = None
+
+    # Password changes
+    pass_main: Optional[str] = None
+    pass_investor: Optional[str] = None
+
+    class Config:
+        schema_extra = {
+            "example": {
+                "login": 954402,
+                "email": "new.email@example.com",
+                "leverage": 200,
+                "comment": "Updated via API"
+            }
+        }
+
 # In-memory cache fallback
 memory_cache = {}
 
@@ -388,6 +434,199 @@ async def force_auth(api_key: bool = Depends(verify_api_key)):
         else:
             raise HTTPException(status_code=500, detail="Authentication failed")
     except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/api/user/get/{login}")
+async def get_user_details(
+    login: int,
+    api_key: bool = Depends(verify_api_key)
+):
+    """Get detailed user information by login"""
+    try:
+        # Check cache first
+        cache_key = f"user:details:{login}"
+        cached_data = cache_get(cache_key)
+
+        if cached_data:
+            return {
+                "success": True,
+                "data": json.loads(cached_data),
+                "cached": True,
+                "timestamp": datetime.now().isoformat()
+            }
+
+        # Fetch from MT5
+        data = await session_manager.execute_request("user/get", {"login": str(login)})
+
+        # Check for MT5 error
+        retcode = data.get("retcode", "")
+        if retcode != "0 Done":
+            if "13" in retcode or "not found" in retcode.lower():
+                raise HTTPException(status_code=404, detail=f"User {login} not found")
+            raise HTTPException(status_code=400, detail=f"MT5 error: {retcode}")
+
+        user_data = data.get("answer", {})
+
+        # Cache for 60 seconds
+        cache_set(cache_key, json.dumps(user_data), 60)
+
+        return {
+            "success": True,
+            "data": user_data,
+            "cached": False,
+            "timestamp": datetime.now().isoformat()
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"Error fetching user {login}: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.put("/api/user/update")
+async def update_user(
+    request: UpdateUserRequest,
+    api_key: bool = Depends(verify_api_key)
+):
+    """Update existing user account on MT5 server"""
+    try:
+        # Build the request body for MT5
+        body = {}
+
+        # Build query parameters
+        params = {"login": str(request.login)}
+
+        # Add all non-None fields to either params or body
+        if request.group is not None:
+            params["group"] = request.group
+        if request.name is not None:
+            params["name"] = request.name
+        if request.leverage is not None:
+            params["leverage"] = str(request.leverage)
+        if request.rights is not None:
+            params["rights"] = str(request.rights)
+
+        # Add user details to body
+        if request.first_name is not None:
+            body["FirstName"] = request.first_name
+        if request.last_name is not None:
+            body["LastName"] = request.last_name
+        if request.middle_name is not None:
+            body["MiddleName"] = request.middle_name
+        if request.company is not None:
+            body["Company"] = request.company
+        if request.country is not None:
+            body["Country"] = request.country
+        if request.city is not None:
+            body["City"] = request.city
+        if request.state is not None:
+            body["State"] = request.state
+        if request.zipcode is not None:
+            body["ZipCode"] = request.zipcode
+        if request.address is not None:
+            body["Address"] = request.address
+        if request.phone is not None:
+            body["Phone"] = request.phone
+        if request.email is not None:
+            body["Email"] = request.email
+        if request.id is not None:
+            body["ID"] = request.id
+        if request.status is not None:
+            body["Status"] = request.status
+        if request.comment is not None:
+            body["Comment"] = request.comment
+        if request.mqid is not None:
+            body["MQID"] = request.mqid
+        if request.phone_password is not None:
+            body["PhonePassword"] = request.phone_password
+        if request.agent is not None:
+            params["agent"] = str(request.agent)
+
+        # Add password changes to body (secure)
+        if request.pass_main is not None:
+            body["PassMain"] = request.pass_main
+        if request.pass_investor is not None:
+            body["PassInvestor"] = request.pass_investor
+
+        # Execute the request
+        client = await session_manager.get_client()
+        url = f"{MT5_SERVER}/api/user/update"
+
+        # Send as POST with JSON body if there's a body, otherwise just params
+        if body:
+            response = await client.post(url, params=params, json=body)
+        else:
+            response = await client.get(url, params=params)
+
+        if response.status_code != 200:
+            error_msg = f"MT5 API error: {response.text}"
+            print(f"User update failed: {error_msg}")
+            raise HTTPException(status_code=response.status_code, detail=error_msg)
+
+        result = response.json()
+
+        # Check for MT5 error
+        retcode = result.get("retcode", "")
+        if retcode != "0 Done":
+            if "13" in retcode:
+                raise HTTPException(status_code=404, detail=f"User {request.login} not found")
+            raise HTTPException(status_code=400, detail=f"MT5 error: {retcode}")
+
+        # Clear cache for this user
+        cache_key = f"user:details:{request.login}"
+        if cache_key in memory_cache:
+            del memory_cache[cache_key]
+
+        # Get updated user data
+        user_data = result.get("answer", {})
+
+        return {
+            "success": True,
+            "message": "User updated successfully",
+            "data": user_data,
+            "timestamp": datetime.now().isoformat()
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"Error updating user {request.login}: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.delete("/api/user/delete/{login}")
+async def delete_user(
+    login: int,
+    api_key: bool = Depends(verify_api_key)
+):
+    """Delete a user account from MT5 server"""
+    try:
+        # Execute the delete request
+        data = await session_manager.execute_request("user/delete", {"login": str(login)})
+
+        # Check for MT5 error
+        retcode = data.get("retcode", "")
+        if retcode != "0 Done":
+            if "13" in retcode:
+                raise HTTPException(status_code=404, detail=f"User {login} not found")
+            if "manager" in retcode.lower() or "administrator" in retcode.lower():
+                raise HTTPException(status_code=403, detail="Cannot delete manager or administrator accounts")
+            raise HTTPException(status_code=400, detail=f"MT5 error: {retcode}")
+
+        # Clear cache for this user
+        cache_key = f"user:details:{login}"
+        if cache_key in memory_cache:
+            del memory_cache[cache_key]
+
+        return {
+            "success": True,
+            "message": f"User {login} deleted successfully",
+            "timestamp": datetime.now().isoformat()
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"Error deleting user {login}: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/api/user/{login}")
