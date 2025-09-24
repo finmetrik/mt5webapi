@@ -6,7 +6,9 @@
       "WebFetch(domain:developers.cloudflare.com)",
       "WebSearch",
       "WebFetch(domain:coolify.io)",
-      "WebFetch(domain:github.com)"
+      "WebFetch(domain:github.com)",
+      "Bash(git add:*)",
+      "Bash(git commit:*)"
     ],
     "deny": [],
     "ask": []

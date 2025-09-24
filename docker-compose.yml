@@ -13,12 +13,9 @@ services:
       - MT5_AGENT=WebManager
       - MT5_VERSION=1290
       - API_KEY=${API_KEY:-development-key-change-in-production}
-      - REDIS_URL=redis://redis:6379
+      # Redis is optional - comment out or leave empty to use in-memory cache
+      # - REDIS_URL=redis://redis:6379
       - CORS_ORIGINS=*
-    depends_on:
-      - redis
-    networks:
-      - mt5-network
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
@@ -27,27 +24,22 @@ services:
       retries: 3
       start_period: 40s
 
-  redis:
-    image: redis:7-alpine
-    container_name: mt5-redis
-    ports:
-      - "6379:6379"
-    volumes:
-      - redis_data:/data
-    command: redis-server --appendonly yes --maxmemory 256mb --maxmemory-policy allkeys-lru
-    networks:
-      - mt5-network
-    restart: unless-stopped
-    healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
-      interval: 30s
-      timeout: 3s
-      retries: 3
+# Optional Redis service - uncomment if you want to use Redis
+# redis:
+#   image: redis:7-alpine
+#   container_name: mt5-redis
+#   ports:
+#     - "6379:6379"
+#   volumes:
+#     - redis_data:/data
+#   command: redis-server --appendonly yes --maxmemory 256mb --maxmemory-policy allkeys-lru
+#   restart: unless-stopped
+#   healthcheck:
+#     test: ["CMD", "redis-cli", "ping"]
+#     interval: 30s
+#     timeout: 3s
+#     retries: 3
 
-networks:
-  mt5-network:
-    driver: bridge
-
-volumes:
-  redis_data:
-    driver: local
+# volumes:
+#   redis_data:
+#     driver: local

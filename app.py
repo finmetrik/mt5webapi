@@ -7,7 +7,7 @@ from datetime import datetime, timedelta
 from typing import Optional, Dict, Any
 
 import httpx
-import redis
+# Redis import - optional
 from fastapi import FastAPI, HTTPException, Depends, Header, Request
 from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
@@ -40,17 +40,25 @@ MT5_PASSWORD = os.getenv('MT5_PASSWORD', 'ApiDubai@2025')
 MT5_AGENT = os.getenv('MT5_AGENT', 'WebManager')
 MT5_VERSION = int(os.getenv('MT5_VERSION', '1290'))
 API_KEY = os.getenv('API_KEY', 'your-secure-api-key-change-this')
-REDIS_URL = os.getenv('REDIS_URL', 'redis://localhost:6379')
+# Redis is optional - will use in-memory cache if not available
+REDIS_URL = os.getenv('REDIS_URL', '')
+REDIS_AVAILABLE = False
+redis_client = None
 
-# Redis connection with error handling
-try:
-    redis_client = redis.from_url(REDIS_URL, decode_responses=True)
-    redis_client.ping()
-    REDIS_AVAILABLE = True
-except:
-    print("Warning: Redis not available, using in-memory cache")
-    redis_client = None
-    REDIS_AVAILABLE = False
+# Try to import and connect to Redis if URL is provided
+if REDIS_URL:
+    try:
+        import redis
+        redis_client = redis.from_url(REDIS_URL, decode_responses=True)
+        redis_client.ping()
+        REDIS_AVAILABLE = True
+        print("Redis connected successfully")
+    except ImportError:
+        print("Redis library not installed, using in-memory cache")
+    except Exception as e:
+        print(f"Redis connection failed, using in-memory cache: {e}")
+else:
+    print("No Redis URL provided, using in-memory cache")
 
 # Request/Response models
 class ExecuteRequest(BaseModel):
