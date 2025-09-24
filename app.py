@@ -82,6 +82,54 @@ class UserResponse(BaseModel):
     error: Optional[str] = None
     cached: bool = False
 
+class CreateUserRequest(BaseModel):
+    """Request model for creating a new user"""
+    # Required fields
+    group: str
+    name: str
+    leverage: int = 100
+
+    # Optional fields with defaults
+    login: Optional[int] = 0  # 0 means auto-assign
+    pass_main: Optional[str] = None  # Will generate if not provided
+    pass_investor: Optional[str] = None  # Will generate if not provided
+
+    # User details
+    first_name: Optional[str] = None
+    last_name: Optional[str] = None
+    middle_name: Optional[str] = None
+    company: Optional[str] = "Individual"
+    country: Optional[str] = None
+    language: Optional[int] = None
+    city: Optional[str] = None
+    state: Optional[str] = None
+    zipcode: Optional[str] = None
+    address: Optional[str] = None
+    phone: Optional[str] = None
+    email: Optional[str] = None
+    id: Optional[str] = None
+    status: Optional[str] = None
+    comment: Optional[str] = None
+    color: Optional[int] = None
+    phone_password: Optional[str] = None
+    agent: Optional[int] = None
+    mqid: Optional[str] = None
+
+    # Rights flags - default enables basic trading
+    rights: Optional[int] = 483  # USER_RIGHT_ENABLED + USER_RIGHT_PASSWORD + USER_RIGHT_TRAILING + USER_RIGHT_EXPERT + USER_RIGHT_REPORTS
+
+    class Config:
+        schema_extra = {
+            "example": {
+                "group": "demoforex",
+                "name": "John Smith",
+                "leverage": 100,
+                "email": "john.smith@example.com",
+                "country": "United States",
+                "city": "New York"
+            }
+        }
+
 # In-memory cache fallback
 memory_cache = {}
 
@@ -525,6 +573,152 @@ async def get_positions_by_symbol(
         raise
     except Exception as e:
         print(f"Error fetching positions for symbol {symbol}: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/api/user/create")
+async def create_user(
+    request: CreateUserRequest,
+    api_key: bool = Depends(verify_api_key)
+):
+    """Create a new user account on MT5 server"""
+    import random
+    import string
+
+    try:
+        # Generate secure passwords if not provided
+        def generate_password():
+            """Generate a secure password meeting MT5 requirements"""
+            # Must contain: lowercase, uppercase, numbers, special chars
+            # Min 8 chars, max 16 chars
+            chars = string.ascii_lowercase + string.ascii_uppercase + string.digits + "#@!$%"
+            while True:
+                password = ''.join(random.choices(chars, k=12))
+                # Ensure it has all required character types
+                if (any(c.islower() for c in password) and
+                    any(c.isupper() for c in password) and
+                    any(c.isdigit() for c in password) and
+                    any(c in "#@!$%" for c in password)):
+                    return password
+
+        pass_main = request.pass_main or generate_password()
+        pass_investor = request.pass_investor or generate_password()
+
+        # Build the request body for MT5
+        body = {
+            "PassMain": pass_main,
+            "PassInvestor": pass_investor,
+            "Rights": str(request.rights)
+        }
+
+        # Add optional fields to body if provided
+        if request.first_name:
+            body["FirstName"] = request.first_name
+        if request.last_name:
+            body["LastName"] = request.last_name
+        if request.middle_name:
+            body["MiddleName"] = request.middle_name
+        if request.company:
+            body["Company"] = request.company
+        if request.country:
+            body["Country"] = request.country
+        if request.city:
+            body["City"] = request.city
+        if request.state:
+            body["State"] = request.state
+        if request.zipcode:
+            body["ZipCode"] = request.zipcode
+        if request.address:
+            body["Address"] = request.address
+        if request.phone:
+            body["Phone"] = request.phone
+        if request.email:
+            body["Email"] = request.email
+        if request.id:
+            body["ID"] = request.id
+        if request.status:
+            body["Status"] = request.status
+        if request.comment:
+            body["Comment"] = request.comment
+        if request.mqid:
+            body["MQID"] = request.mqid
+        if request.phone_password:
+            body["PhonePassword"] = request.phone_password
+
+        # Build query parameters
+        params = {
+            "group": request.group,
+            "name": request.name,
+            "leverage": str(request.leverage)
+        }
+
+        # Add login if specified (0 means auto-assign)
+        if request.login and request.login > 0:
+            params["login"] = str(request.login)
+
+        # Add agent if specified
+        if request.agent:
+            params["agent"] = str(request.agent)
+
+        # Execute the request using POST with body
+        client = await session_manager.get_client()
+        url = f"{MT5_SERVER}/api/user/add"
+
+        # Send as POST with JSON body
+        response = await client.post(
+            url,
+            params=params,
+            json=body
+        )
+
+        if response.status_code != 200:
+            error_msg = f"MT5 API error: {response.text}"
+            print(f"User creation failed: {error_msg}")
+            raise HTTPException(
+                status_code=response.status_code,
+                detail=error_msg
+            )
+
+        result = response.json()
+
+        # Check for MT5 error
+        if result.get("retcode", "") != "0 Done":
+            error_code = result.get("retcode", "Unknown error")
+            error_messages = {
+                "3002": "No available login ranges",
+                "3003": "Cannot add user to different server",
+                "3004": "Account already exists",
+                "3": "Invalid record",
+                "3006": "Invalid password (not complex enough or too short)",
+                "8": "Permission denied or group does not exist"
+            }
+            # Extract just the error code number
+            code = error_code.split()[0] if " " in error_code else error_code
+            error_detail = error_messages.get(code, f"MT5 error: {error_code}")
+            raise HTTPException(status_code=400, detail=error_detail)
+
+        # Success response
+        user_data = result.get("answer", {})
+
+        return {
+            "success": True,
+            "message": "User created successfully",
+            "data": {
+                "login": user_data.get("Login"),
+                "group": user_data.get("Group"),
+                "name": user_data.get("Name"),
+                "passwords": {
+                    "main": pass_main,
+                    "investor": pass_investor
+                },
+                "user_details": user_data
+            },
+            "timestamp": datetime.now().isoformat()
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"Error creating user: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/api/test")
