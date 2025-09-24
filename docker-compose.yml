@@ -1,0 +1,53 @@
+version: '3.8'
+
+services:
+  mt5-api:
+    build: .
+    container_name: mt5-api
+    ports:
+      - "8000:8000"
+    environment:
+      - MT5_SERVER=https://92.204.169.182:443
+      - MT5_LOGIN=47325
+      - MT5_PASSWORD=ApiDubai@2025
+      - MT5_AGENT=WebManager
+      - MT5_VERSION=1290
+      - API_KEY=${API_KEY:-development-key-change-in-production}
+      - REDIS_URL=redis://redis:6379
+      - CORS_ORIGINS=*
+    depends_on:
+      - redis
+    networks:
+      - mt5-network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+  redis:
+    image: redis:7-alpine
+    container_name: mt5-redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    command: redis-server --appendonly yes --maxmemory 256mb --maxmemory-policy allkeys-lru
+    networks:
+      - mt5-network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 30s
+      timeout: 3s
+      retries: 3
+
+networks:
+  mt5-network:
+    driver: bridge
+
+volumes:
+  redis_data:
+    driver: local
