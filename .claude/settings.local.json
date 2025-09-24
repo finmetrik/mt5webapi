@@ -1,0 +1,13 @@
+{
+  "permissions": {
+    "allow": [
+      "Read(//Users/orfinex/Projects/mt5-laravel-api/app/Services/**)",
+      "Read(//Users/orfinex/Projects/mt5-laravel-api/**)",
+      "WebFetch(domain:developers.cloudflare.com)",
+      "WebSearch",
+      "WebFetch(domain:coolify.io)"
+    ],
+    "deny": [],
+    "ask": []
+  }
+}
