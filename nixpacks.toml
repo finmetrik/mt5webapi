@@ -1,11 +1,12 @@
 # Nixpacks configuration for Coolify
-# This is optional - Coolify will use Dockerfile by default
-
 [phases.setup]
 nixPkgs = ["python311", "gcc"]
 
 [phases.install]
-cmds = ["pip install -r requirements.txt"]
+cmds = ["pip install --upgrade pip", "pip install -r requirements.txt"]
 
 [start]
 cmd = "uvicorn app:app --host 0.0.0.0 --port 8000"
+
+[providers.python]
+runtime = "python-3.11"
