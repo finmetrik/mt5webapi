@@ -33,13 +33,23 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Configuration
-MT5_SERVER = os.getenv('MT5_SERVER', 'https://92.204.169.182:443')
-MT5_LOGIN = os.getenv('MT5_LOGIN', '47325')
-MT5_PASSWORD = os.getenv('MT5_PASSWORD', 'ApiDubai@2025')
+# Configuration - Environment variables are REQUIRED in production
+MT5_SERVER = os.getenv('MT5_SERVER')
+MT5_LOGIN = os.getenv('MT5_LOGIN')
+MT5_PASSWORD = os.getenv('MT5_PASSWORD')
 MT5_AGENT = os.getenv('MT5_AGENT', 'WebManager')
 MT5_VERSION = int(os.getenv('MT5_VERSION', '1290'))
-API_KEY = os.getenv('API_KEY', 'your-secure-api-key-change-this')
+API_KEY = os.getenv('API_KEY')
+
+# Validate required environment variables
+if not all([MT5_SERVER, MT5_LOGIN, MT5_PASSWORD, API_KEY]):
+    print("⚠️ WARNING: Missing required environment variables!")
+    print("Using development defaults - DO NOT use in production!")
+    # Development defaults (remove these in production)
+    MT5_SERVER = MT5_SERVER or 'https://92.204.169.182:443'
+    MT5_LOGIN = MT5_LOGIN or '47325'
+    MT5_PASSWORD = MT5_PASSWORD or 'ApiDubai@2025'
+    API_KEY = API_KEY or 'development-key-change-this'
 
 # Redis is optional - will use in-memory cache if not available
 REDIS_URL = os.getenv('REDIS_URL', '')
