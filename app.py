@@ -910,8 +910,21 @@ async def create_user(
         )
 
         if response.status_code != 200:
-            error_msg = f"MT5 API error: {response.text}"
-            print(f"User creation failed: {error_msg}")
+            # Try to parse error response
+            try:
+                error_data = response.json()
+                error_msg = error_data.get("retcode", response.text)
+            except:
+                error_msg = response.text
+
+            # More specific error messages
+            if response.status_code == 403:
+                error_msg = "Permission denied. Check: 1) Group name and permissions, 2) IP whitelisting, 3) Manager rights. See docs/USER_CREATION_GUIDE.md"
+            elif response.status_code == 401:
+                error_msg = "Authentication failed. MT5 session may have expired."
+            else:
+                error_msg = f"MT5 API error: {error_msg}"
+
             raise HTTPException(
                 status_code=response.status_code,
                 detail=error_msg
