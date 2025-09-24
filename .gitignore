@@ -1,5 +1,5 @@
-# Documentation folder
-docs/
+# Documentation folder - commented out to include docs
+# docs/
 
 # Python cache
 __pycache__/
