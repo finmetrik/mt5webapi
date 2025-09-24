@@ -5,7 +5,7 @@ services:
     build: .
     container_name: mt5-api
     ports:
-      - "8000:8000"
+      - "3000:3000"
     environment:
       - MT5_SERVER=https://92.204.169.182:443
       - MT5_LOGIN=47325
@@ -18,7 +18,7 @@ services:
       - CORS_ORIGINS=*
     restart: unless-stopped
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      test: ["CMD", "curl", "-f", "http://localhost:3000/health"]
       interval: 30s
       timeout: 10s
       retries: 3
