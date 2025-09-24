@@ -166,7 +166,138 @@ Execute any MT5 API command.
 
 ---
 
-### 6. Test Connection
+### 6. Get Positions by Login
+Get open positions for a specific login.
+
+**Endpoint:** `GET /api/positions/by-login/{login}`
+**Authentication:** Required
+
+**Parameters:**
+- `login` (path): User login ID
+- `symbol` (query, optional): Filter by symbol
+
+**Example:**
+```
+GET /api/positions/by-login/47325
+GET /api/positions/by-login/47325?symbol=EURUSD
+```
+
+**Response:**
+```json
+{
+  "success": true,
+  "data": {
+    "answer": [
+      {
+        "ticket": 1012,
+        "login": 47325,
+        "symbol": "EURUSD",
+        "volume": 10000,
+        "price_open": 1.0850,
+        "price_current": 1.0855,
+        "profit": 5.00
+      }
+    ],
+    "retcode": "0"
+  },
+  "cached": false,
+  "timestamp": "2025-01-24T12:00:00"
+}
+```
+
+---
+
+### 7. Get Positions by Group
+Get open positions for users in specific group(s).
+
+**Endpoint:** `GET /api/positions/by-group/{group}`
+**Authentication:** Required
+
+**Parameters:**
+- `group` (path): Group name or pattern (supports wildcards: `*` for any, `!` for exclude)
+- `symbol` (query, optional): Filter by symbol
+
+**Examples:**
+```
+GET /api/positions/by-group/demoforex
+GET /api/positions/by-group/demo*
+GET /api/positions/by-group/demo*,!demoforex
+GET /api/positions/by-group/demoforex?symbol=GBPUSD
+```
+
+**Response:**
+```json
+{
+  "success": true,
+  "data": {
+    "answer": [
+      {
+        "ticket": 1012,
+        "login": 47325,
+        "group": "demoforex",
+        "symbol": "GBPUSD",
+        "volume": 5000,
+        "profit": -12.50
+      }
+    ],
+    "retcode": "0"
+  },
+  "cached": false,
+  "timestamp": "2025-01-24T12:00:00"
+}
+```
+
+---
+
+### 8. Get Positions by Symbol
+Get all open positions for a specific symbol across all users.
+
+**Endpoint:** `GET /api/positions/by-symbol/{symbol}`
+**Authentication:** Required
+
+**Parameters:**
+- `symbol` (path): Trading symbol (e.g., EURUSD, GBPUSD)
+
+**Example:**
+```
+GET /api/positions/by-symbol/EURUSD
+```
+
+**Response:**
+```json
+{
+  "success": true,
+  "data": {
+    "answer": [
+      {
+        "ticket": 1012,
+        "login": 47325,
+        "symbol": "EURUSD",
+        "volume": 10000,
+        "type": "buy",
+        "profit": 25.00
+      },
+      {
+        "ticket": 1013,
+        "login": 46108,
+        "symbol": "EURUSD",
+        "volume": 5000,
+        "type": "sell",
+        "profit": -10.00
+      }
+    ],
+    "retcode": "0"
+  },
+  "cached": false,
+  "timestamp": "2025-01-24T12:00:00"
+}
+```
+
+**Note:** Positions are cached for 30 seconds due to their frequently changing nature.
+
+---
+
+### 9. Test Connection
 Test MT5 connection with a known user.
 
 **Endpoint:** `GET /api/test`

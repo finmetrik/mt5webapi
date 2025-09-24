@@ -396,6 +396,137 @@ async def execute_command(
         print(f"Error executing command {request.endpoint}: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
+@app.get("/api/positions/by-login/{login}")
+async def get_positions_by_login(
+    login: str,
+    symbol: Optional[str] = None,
+    api_key: bool = Depends(verify_api_key)
+):
+    """Get positions by login ID, optionally filtered by symbol"""
+    try:
+        params = {"login": login}
+        if symbol:
+            params["symbol"] = symbol
+
+        # Check cache
+        cache_key = f"positions:login:{login}:{symbol or 'all'}"
+        cached_data = cache_get(cache_key)
+
+        if cached_data:
+            return {
+                "success": True,
+                "data": json.loads(cached_data),
+                "cached": True,
+                "timestamp": datetime.now().isoformat()
+            }
+
+        # Fetch from MT5
+        data = await session_manager.execute_request("position/get_batch", params)
+
+        # Cache for 30 seconds (positions change frequently)
+        cache_set(cache_key, json.dumps(data), 30)
+
+        return {
+            "success": True,
+            "data": data,
+            "cached": False,
+            "timestamp": datetime.now().isoformat()
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"Error fetching positions for login {login}: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/api/positions/by-group/{group}")
+async def get_positions_by_group(
+    group: str,
+    symbol: Optional[str] = None,
+    api_key: bool = Depends(verify_api_key)
+):
+    """Get positions by group, optionally filtered by symbol. Supports wildcards like 'demo*' or '!demoforex'"""
+    try:
+        params = {"group": group}
+        if symbol:
+            params["symbol"] = symbol
+
+        # Check cache
+        cache_key = f"positions:group:{group}:{symbol or 'all'}"
+        cached_data = cache_get(cache_key)
+
+        if cached_data:
+            return {
+                "success": True,
+                "data": json.loads(cached_data),
+                "cached": True,
+                "timestamp": datetime.now().isoformat()
+            }
+
+        # Fetch from MT5
+        data = await session_manager.execute_request("position/get_batch", params)
+
+        # Cache for 30 seconds
+        cache_set(cache_key, json.dumps(data), 30)
+
+        return {
+            "success": True,
+            "data": data,
+            "cached": False,
+            "timestamp": datetime.now().isoformat()
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"Error fetching positions for group {group}: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/api/positions/by-symbol/{symbol}")
+async def get_positions_by_symbol(
+    symbol: str,
+    api_key: bool = Depends(verify_api_key)
+):
+    """Get all positions for a specific symbol across all users"""
+    try:
+        # For symbol-only queries, we need to specify all groups or logins
+        # Using wildcard to get all groups
+        params = {
+            "group": "*",  # All groups
+            "symbol": symbol
+        }
+
+        # Check cache
+        cache_key = f"positions:symbol:{symbol}"
+        cached_data = cache_get(cache_key)
+
+        if cached_data:
+            return {
+                "success": True,
+                "data": json.loads(cached_data),
+                "cached": True,
+                "timestamp": datetime.now().isoformat()
+            }
+
+        # Fetch from MT5
+        data = await session_manager.execute_request("position/get_batch", params)
+
+        # Cache for 30 seconds
+        cache_set(cache_key, json.dumps(data), 30)
+
+        return {
+            "success": True,
+            "data": data,
+            "cached": False,
+            "timestamp": datetime.now().isoformat()
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"Error fetching positions for symbol {symbol}: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
 @app.get("/api/test")
 async def test_endpoint(api_key: bool = Depends(verify_api_key)):
     """Test endpoint to verify MT5 connection"""
