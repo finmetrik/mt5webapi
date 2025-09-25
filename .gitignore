@@ -1,5 +1,8 @@
-# Documentation folder - commented out to include docs
-# docs/
+# Documentation folder - keep local only
+docs/
+
+# Claude Code folder - keep local only
+.claude/
 
 # Python cache
 __pycache__/
